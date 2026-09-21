@@ -30,18 +30,29 @@ The original NextWork lab covered one detection use case: alerting on Secrets Ma
   { ($.eventName = "ConsoleLogin") && ($.errorMessage = "Failed authentication") }
   ```
 - **Alarm** (`FailedConsoleLogin-Alarm`) triggers when `FailedConsoleLogins >= 1` within a 5-minute window, notifying the `SecurityAlarms` SNS topic.
+
+![CloudWatch alarms list showing FailedConsoleLogin-Alarm in alarm state](screenshots/FailedConsoleLogin_Alarm.png)
+
+![CloudWatch alarm email notification](screenshots/FailedConsoleLogin_AlarmEmail.png)
+
 - **Why this matters:** repeated failed console logins are a classic signal for brute-force or credential-stuffing attempts. This complements the CloudWatch metric-filter pattern from the base lab, applied to a genuinely different and common security use case.
 
 ### 2. Root Console Login Detection (EventBridge Rule)
 
 - **EventBridge rule** (`RootConsoleLogin-Rule`) matching CloudTrail console sign-in events specifically where `userIdentity.type = "Root"`, routed to the `SecurityAlarms` SNS topic.
 - **Built in two regions (`us-east-1` and `us-east-2`).** During testing, I discovered that CloudTrail can record a root `ConsoleLogin` event under a different `awsRegion` than what the console UI displayed at the time of login — the two were inconsistent across multiple test attempts from the same account and IP. Rather than assume a single region was reliable, I diagnosed this using CloudWatch Logs Insights (comparing timestamps, regions, and source IPs across several login attempts) and built the rule redundantly in both regions to ensure detection regardless of which region CloudTrail ultimately logs the event under.
+
+![EventBridge rule monitoring tab showing a matched root login event](screenshots/EventBridge_MonitoringTab_RootLogin.png)
+
 - **Why this matters:** any root account login is high-signal in a well-run AWS environment, since daily operations should be handled by IAM users/roles, not root. Detecting root usage in near-real-time is a standard security monitoring practice.
 
 ### 3. IAM Policy Change Detection (EventBridge Rule)
 
 - **EventBridge rule** (`IAMPolicyChange-Rule`) matching IAM policy-modification events (`PutUserPolicy`, `AttachUserPolicy`, `CreatePolicyVersion`, `AttachRolePolicy`), routed to the `SecurityAlarms` SNS topic.
 - **Built specifically in `us-east-1`.** IAM is a global AWS service, and IAM API calls are always recorded by CloudTrail with `us-east-1` as the `awsRegion`, regardless of which region the console was set to when the action was performed. I confirmed this directly via Logs Insights before building the rule, avoiding a repeat of the region-mismatch issue from the root login rule.
+
+![EventBridge rule monitoring tab showing a matched IAM policy change event](screenshots/EventBridge_MonitoringTab_RootLogin.png)
+
 - **Why this matters:** unauthorized or unexpected IAM policy changes are a common indicator of privilege escalation, either from a compromised credential or insider misconfiguration. Alerting on these changes in near-real-time supports faster detection and response.
 
 ## Testing & Verification
@@ -49,8 +60,17 @@ The original NextWork lab covered one detection use case: alerting on Secrets Ma
 Each detection path was verified end-to-end using real triggered events, not just synthetic pattern tests:
 
 - **Failed login:** created a disposable, low-privilege IAM test user (`test-user`) specifically to avoid repeatedly testing failed logins against root or an admin account. Intentionally failed login 3 times, confirmed the event in CloudTrail via Logs Insights, confirmed the alarm entered `ALARM` state, and confirmed SNS email delivery.
+
+![Logs Insights query confirming failed login events](screenshots/FailedLogin_LogsInsights.png)
+  
 - **Root login:** performed deliberate, minimal root console logins (sign in, immediately sign out) to generate genuine root `ConsoleLogin` events, confirmed via Logs Insights, EventBridge rule invocation metrics, and SNS email delivery in both regions.
+
+![SNS email notification for a root console login](screenshots/RootLoginEmailNotification.png)
+
 - **IAM policy change:** attached (and reattached, after detaching) a low-privilege managed policy (`AmazonS3ReadOnlyAccess`) to the disposable test user to generate a genuine `AttachUserPolicy` event, confirmed via EventBridge rule invocation metrics and SNS email delivery.
+
+![SNS email notification for an IAM policy change](screenshots/IAMPolicyChange_Email.png)
+
 
 ## Operational Security Practices Followed
 
